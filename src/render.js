@@ -18,10 +18,7 @@ const laneColor = i => `var(--lane-${i % 6})`;
 
 const MONO = '"IBM Plex Mono", monospace';
 
-let renderedState = null;   // 지금 화면에 그려진 state (미리보기일 수 있음)
-
 function render(s, base){
-  renderedState = s;
   const L = layout(s);
   const W = Math.max(660, X0 + (L.maxD + 1) * COL + 46);
   const H = Math.max(300, Y0 + (L.maxL + 1) * ROW + 34);
@@ -133,12 +130,25 @@ function render(s, base){
   document.getElementById("head-label").textContent = cb || shortOf(hc || "");
   document.getElementById("head-note").textContent = cb ? "" : "(detached HEAD)";
   renderSync(s);
+  renderConflict(s);
+}
+
+function renderConflict(s){
+  const box = document.getElementById("conflict");
+  box.hidden = !s.conflict;
+  stageWrap.classList.toggle("is-conflict", !!s.conflict);
+  if(!s.conflict) return;
+  document.getElementById("c-msg").textContent =
+    `충돌 — ${s.conflict.label} 이(가) ${s.conflict.files.join(", ")} 에서 멈췄습니다. 그래프는 아직 그대로입니다.`;
+  document.getElementById("btn-resolve").textContent = s.conflict.cont;
+  document.getElementById("btn-abort").textContent = s.conflict.abort;
 }
 
 /* origin 과 얼마나 어긋나 있나 — 한 줄 상태 표시 */
 function renderSync(s){
   const box = document.getElementById("sync");
   const b = curBranch(s);
+  box.classList.remove("warn");
   if(!b || s.remote[b] === undefined){ box.textContent = b ? "origin 에 없는 브랜치 — push 하면 새로 생깁니다" : ""; return; }
   const local = s.refs[b], track = s.tracking[b], server = s.remote[b];
   const ahead  = [...ancestors(s, local)].filter(id => !ancestors(s, track).has(id)).length;

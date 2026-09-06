@@ -31,6 +31,13 @@
         <span class="sync" id="sync"></span>
         <span class="preview-pill">● 미리보기 — 이 명령을 고르면 이렇게 됩니다</span>
       </div>
+      <div class="conflict" id="conflict" hidden>
+        <div class="c-msg" id="c-msg"></div>
+        <div class="c-btns">
+          <button class="btn primary" id="btn-resolve"></button>
+          <button class="btn" id="btn-abort"></button>
+        </div>
+      </div>
       <div class="stage" id="stage">
         <svg id="graph" width="880" height="440" role="img" aria-label="git 커밋 그래프"></svg>
       </div>
@@ -46,8 +53,17 @@
       </section>
 
       <section class="panel">
-        <div class="panel-head"><span class="panel-title">이렇게 해보세요</span></div>
-        <div class="guide">
+        <div class="panel-head">
+          <span class="panel-title" id="side-title">이렇게 해보세요</span>
+          <select class="sel" id="mode" aria-label="모드"><option value="">놀이터 (자유)</option></select>
+        </div>
+        <div class="quest" id="quest" hidden>
+          <p class="q-brief"></p>
+          <p class="q-goal"></p>
+          <p class="q-state" id="q-state"></p>
+          <details class="q-hint"><summary>힌트</summary><p></p></details>
+        </div>
+        <div class="guide" id="guide">
           <p class="grp">끌어다 놓기</p>
           <dl>
             <dt>브랜치 이름표</dt><dd>포인터만 옮기기 — <b>reset</b> / <b>branch -f</b> / <b>checkout</b></dd>
@@ -57,14 +73,18 @@
             <dt>HEAD, 태그</dt><dd>보는 위치 옮기기 / <b>tag -f</b> vs 새 태그</dd>
           </dl>
           <dl>
-            <dt>브랜치 칩 클릭</dt><dd>갈아타기 — <b>switch</b> vs <b>checkout</b></dd>
           </dl>
-          <p class="grp">우클릭 (클릭과 같은 메뉴)</p>
+          <p class="grp">눌러서 열기 (우클릭도 같음)</p>
           <dl>
             <dt>커밋</dt><dd><b>amend</b> / <b>revert</b> / <b>reset</b> / <b>reword</b> / <b>drop</b> / <b>tag</b></dd>
-            <dt>브랜치 칩</dt><dd>원격 — <b>push</b> / <b>--force-with-lease</b> / <b>pull</b> / <b>--rebase</b></dd>
+            <dt>브랜치 칩</dt><dd>갈아타기 <b>switch</b>, 원격 <b>push</b> / <b>--force-with-lease</b> / <b>pull</b></dd>
             <dt>origin/… 칩</dt><dd><b>fetch</b> 로 받아온 것 합치기 / 맞추기</dd>
             <dt>흐린 커밋</dt><dd>버려진 커밋 되살리기 — <b>reflog</b> / <b>branch</b></dd>
+          </dl>
+          <p class="grp">그 밖에</p>
+          <dl>
+            <dt>후보의 ⚠</dt><dd>고르기 전에 <b>충돌</b>이 예고됩니다 — 어느 파일에서 겹치는지까지</dd>
+            <dt>위 드롭다운</dt><dd><b>과제</b> 7개 — 목표를 주고 달성을 판정합니다</dd>
           </dl>
         </div>
       </section>
@@ -78,7 +98,8 @@
     <div class="pop-sub" id="pop-sub"></div>
   </div>
   <div class="pop-list" id="pop-list"></div>
-  <div class="pop-foot"><span>항목에 마우스를 올리면 결과를 미리 봅니다</span><span>Esc 취소</span></div>
+  <div class="pop-why" id="pop-why"></div>
+  <div class="pop-foot"><span>올리거나 <b>↑↓</b> 로 결과 미리보기</span><span>Esc 취소</span></div>
 </div>
 
 
@@ -86,5 +107,6 @@
 <script src="src/layout.js"></script>
 <script src="src/render.js"></script>
 <script src="src/commands.js"></script>
+<script src="src/scenarios.js"></script>
 <script src="src/main.js"></script>
 <script src="src/selfcheck.js"></script>

@@ -88,5 +88,58 @@
     ok(pm.commits[pm.refs.main].parents.length === 2, "pull 은 병합 커밋을 만든다");
     const pb = OPS.pull(OPS.matePush(clone(s), "main"), "main", true);
     ok(pb.refs.main === pb.tracking.main && n(pb) === n(s) + 1, "뒤처지기만 했으면 pull 은 fast-forward");
+
+    /* ---- 충돌 ---- */
+    const cf = () => {
+      const c = initialState();
+      OPS.checkout(c, "feature"); OPS.commit(c, "A", ["api.js"]);
+      OPS.checkout(c, "main");    OPS.commit(c, "B", ["api.js"]);
+      return c;
+    };
+    ok(conflictFiles(s, MAIN, FEAT).length === 0, "시드는 서로 다른 파일이라 충돌 없음");
+    const cx = OPS.merge(clone(cf()), "feature");
+    ok(cx.conflict && cx.conflict.files.join() === "api.js", "같은 파일이면 merge 가 멈춘다");
+    ok(n(cx) === n(cf()), "충돌 중엔 그래프가 안 바뀐다 — abort 가 공짜인 이유");
+    const cAbort = OPS.abortConflict(clone(cx));
+    ok(!cAbort.conflict && n(cAbort) === n(cx), "abort 는 표시만 지운다");
+    const cDone = OPS.resolveConflict(clone(cx));
+    ok(!cDone.conflict && cDone.commits[cDone.refs.main].parents.length === 2, "해결하면 병합 커밋이 생긴다");
+
+    // patch — 다시 쓴 커밋과 원본은 같은 변경이다
+    const cp = clone(s);
+    OPS.commit(cp, "핫픽스", ["api.js"]);
+    const fix = cp.refs.main;
+    OPS.checkout(cp, "feature"); OPS.cherryPick(cp, fix);
+    ok(cp.commits[cp.refs.feature].patch === cp.commits[fix].patch, "cherry-pick 은 patch 를 물려받는다");
+    ok(conflictFiles(cp, fix, cp.refs.feature).length === 0, "이미 반영된 변경은 충돌이 아니다");
+
+    /* ---- 과제 ---- */
+    const solve = {
+      ff:      q => OPS.merge(clone(q.state), "feature"),
+      rebase:  q => { const y = clone(q.state); OPS.checkout(y,"feature");
+                      return OPS.replay(y,"feature",q.state.refs.main,q.state.refs.main); },
+      squash:  q => OPS.squash(clone(q.state), q.state.refs.feature),
+      reflog:  q => OPS.createBranch(clone(q.state), "rescue", [...orphanSet(q.state)][0]),
+      lease:   q => OPS.push(OPS.pull(clone(q.state), "main", true), "main"),
+      pull:    q => OPS.push(OPS.pull(clone(q.state), "main", true), "main"),
+      conflict:q => OPS.abortConflict(OPS.merge(clone(q.state), "feature"))
+    };
+    ok(SCENARIOS.length === Object.keys(solve).length, "과제가 전부 검사된다");
+    for(const sc of SCENARIOS){
+      const q = sc.make();
+      ok(!q.done(q.state), `과제 ${sc.id}: 시작은 미달성`);
+      ok(q.done(solve[sc.id](q)), `과제 ${sc.id}: 의도한 풀이로 달성`);
+    }
+    // 솔깃한 오답으로는 안 풀린다
+    const wrong = [
+      ["ff",     q => OPS.merge(clone(q.state), "feature", {noff:true})],
+      ["rebase", q => OPS.merge(clone(q.state), "feature")],
+      ["lease",  q => OPS.push(clone(q.state), "main", "force")],
+      ["pull",   q => OPS.push(OPS.pull(clone(q.state), "main"), "main")]
+    ];
+    for(const [id, f] of wrong){
+      const q = SCENARIOS.find(x => x.id === id).make();
+      ok(!q.done(f(q)), `과제 ${id}: 오답 경로로는 안 풀린다`);
+    }
   }catch(err){ console.error("self-check 실패:", err); }
 })();

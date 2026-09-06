@@ -4,6 +4,51 @@
    적용 — 모든 명령이 여기를 지난다. reflog 도 여기서 쌓인다
    ============================================================ */
 
+/* ============================================================
+   과제 — 달성 판정은 state 술어 하나뿐이라 undo 를 해도 저절로 맞다
+   ============================================================ */
+
+let quest = null, questId = "";
+
+function loadMode(id){
+  closePop();
+  questId = id;
+  undoStack.length = 0; msgIdx = 0; mateIdx = 0; fileIdx = 0;
+  const sc = SCENARIOS.find(x => x.id === id);
+  if(!sc){ quest = null; state = initialState(); }
+  else {
+    quest = sc.make();
+    state = quest.state;
+    out(state, `과제 · ${quest.goal}`, "note");
+  }
+  render(state); renderQuest(); renderConsole();
+  document.getElementById("btn-undo").disabled = true;
+}
+
+function renderQuest(){
+  document.getElementById("guide").hidden = !!quest;
+  document.getElementById("quest").hidden = !quest;
+  document.getElementById("side-title").textContent = quest ? "과제" : "이렇게 해보세요";
+  if(!quest) return;
+  const qp = document.getElementById("quest");
+  qp.querySelector(".q-brief").textContent = quest.brief;
+  qp.querySelector(".q-goal").textContent = quest.goal;
+  qp.querySelector(".q-hint p").textContent = quest.hint;
+  const cleared = quest.done(state);
+  const st = document.getElementById("q-state");
+  st.textContent = cleared ? "✓ 달성" : "아직";
+  st.classList.toggle("ok", cleared);
+}
+
+/* 달성 안내는 콘솔에 한 줄만. 표식을 state.log 에 두므로 undo 로 되돌리면
+   표식도 같이 사라지고, 다시 풀면 다시 뜬다 (모듈 변수로 들고 있으면 이게 안 맞는다) */
+function checkQuest(){
+  if(quest && quest.done(state) && !state.log.some(l => l.k === "quest")){
+    out(state, `✓ 과제 달성 — ${quest.goal}`, "quest");
+  }
+  renderQuest();
+}
+
 function commit(next, cmdText){
   const prev = state;
   undoStack.push(clone(prev));
@@ -14,6 +59,7 @@ function commit(next, cmdText){
   }
   state = next;
   render(state);
+  checkQuest();
   renderConsole();
   document.getElementById("btn-undo").disabled = !undoStack.length;
 }
@@ -35,6 +81,9 @@ function reflogAdd(prev, next, cmd){
 
 const pop = document.getElementById("pop");
 const popList = document.getElementById("pop-list");
+const popQ = document.getElementById("pop-q");
+const popSub = document.getElementById("pop-sub");
+const popWhy = document.getElementById("pop-why");
 let drag = null;
 
 const popTitle = f => ({ ref:`브랜치 '${f.name}'`, tag:`태그 '${f.name}'`, tracking:`origin/${f.name}`, head:"HEAD" }[f.kind]
@@ -55,15 +104,23 @@ const chipAnchor = (s, kind, name) =>
   : kind === "tracking" ? s.tracking[name]
   : s.refs[name];
 
-/* 칩을 끌지 않고 그냥 눌렀을 때 — 우클릭과 같은 메뉴를 연다 (우클릭을 모를 수도 있으니) */
-const chipMenu = (s, kind, name) =>
+/* 끌지 않고 그냥 눌렀을 때 — 우클릭과 같은 메뉴를 연다.
+   터치 기기엔 우클릭이 없어서, 이게 없으면 amend/revert/tag 에 아예 닿을 수 없다 */
+const clickMenu = (s, kind, name) =>
   kind === "ref" ? branchMenu(s, name)
   : kind === "tag" ? tagMenu(s, name)
   : kind === "tracking" ? trackingMenu(s, name)
+  : kind === "commit" ? commitMenu(s, name)
   : [];
+const clickSub = (s, kind, name) =>
+  kind === "commit" ? s.commits[name].msg
+  : kind === "ref" ? "원격과 주고받기 / 갈아타기"
+  : kind === "tag" ? "태그는 커밋을 따라 움직이지 않습니다"
+  : "내가 마지막으로 본 origin 의 모습";
 
 svg.addEventListener("pointerdown", e => {
   if(stageWrap.classList.contains("is-preview")) return;
+  if(state.conflict) return;      // 충돌 중엔 해결하거나 취소하는 것 말고 할 수 있는 게 없다
   if(e.button !== 0) return;
   const chip = e.target.closest("[data-chip]");
   const node = e.target.closest("[data-commit]");
@@ -88,15 +145,22 @@ svg.addEventListener("pointermove", e => {
   svg.querySelectorAll(".node").forEach(n => n.classList.toggle("drop-ok", n.getAttribute("data-commit") === over && over !== drag.from.name));
 });
 
-svg.addEventListener("pointerup", e => {
-  if(!drag) return;
+function endDrag(){
   const d = drag; drag = null;
   const line = svg.querySelector("#drag-line");
   if(line) line.setAttribute("d", "");
   svg.querySelectorAll(".node").forEach(n => n.classList.remove("drop-ok"));
+  return d;
+}
+// 브라우저가 드래그를 가로채면(스크롤 제스처 등) 끌던 선이 화면에 남는다
+svg.addEventListener("pointercancel", endDrag);
+
+svg.addEventListener("pointerup", e => {
+  if(!drag) return;
+  const d = endDrag();
   if(!d.moved){
-    const list = chipMenu(state, d.from.kind, d.from.name);
-    if(list.length) openPop(popTitle(d.from), "무엇을 하시겠어요?", list);
+    const list = clickMenu(state, d.from.kind, d.from.name);
+    if(list.length) openPop(popTitle(d.from), clickSub(state, d.from.kind, d.from.name), list);
     return;
   }
   const target = commitUnder(e);
@@ -110,48 +174,62 @@ svg.addEventListener("pointerup", e => {
 svg.addEventListener("contextmenu", e => {
   const chip = e.target.closest("[data-chip]");
   const node = e.target.closest("[data-commit]");
-  if(!chip && !node) return;
+  if(!chip && !node || state.conflict) return;
   e.preventDefault();
 
-  let q, sub, list;
-  if(chip){
-    const kind = chip.getAttribute("data-chip"), name = chip.getAttribute("data-name");
-    if(kind === "ref"){      q = `브랜치 ${name}`;        sub = "원격과 주고받기 / 이름표 다루기"; list = branchMenu(state, name); }
-    else if(kind === "tag"){ q = `태그 ${name}`;          sub = "태그는 커밋을 따라 움직이지 않습니다"; list = tagMenu(state, name); }
-    else if(kind === "tracking"){ q = `origin/${name}`;   sub = "내가 마지막으로 본 origin 의 모습"; list = trackingMenu(state, name); }
-    else return;
-  }else{
-    const id = node.getAttribute("data-commit");
-    q = `커밋 ${shortOf(id)}`;
-    sub = state.commits[id].msg;
-    list = commitMenu(state, id);
-  }
-  if(list && list.length) openPop(q, sub, list);
+  const from = chip
+    ? { kind: chip.getAttribute("data-chip"), name: chip.getAttribute("data-name") }
+    : { kind: "commit", name: node.getAttribute("data-commit") };
+  const list = clickMenu(state, from.kind, from.name);
+  if(list.length) openPop(popTitle(from), clickSub(state, from.kind, from.name), list);
 });
 
+/* 목록은 명령어만 한 줄씩(훑기 쉽게), 설명은 아래 고정 칸에 '지금 보고 있는 것'만.
+   칸 높이가 고정이라 항목을 옮겨다녀도 목록이 출렁이지 않는다 */
 function openPop(q, sub, list){
-  document.getElementById("pop-q").textContent = q;
-  document.getElementById("pop-sub").textContent = sub;
+  popQ.textContent = q;
+  popSub.textContent = sub;
   popList.innerHTML = "";
-  const baseState = state;
-  for(const c of list){
+  const base = state;
+
+  // 강조는 .cur 하나로만 — :hover 와 :focus 를 같이 쓰면 두 줄이 동시에 밝아진다
+  const show = i => {
+    [...popList.children].forEach((el, j) => el.classList.toggle("cur", j === i));
+    popWhy.textContent = list[i].why;
+    render(list[i].act(clone(base)), base);
+  };
+  // 항목 사이를 지날 때 base 로 안 돌아간다 — 그러면 미리보기가 깜빡인다
+  popList.onmouseleave = () => {
+    const f = popList.querySelector(".cand:focus");
+    if(f) show(+f.dataset.i); else render(base);
+  };
+
+  list.forEach((c, i) => {
     const b = document.createElement("button");
     b.className = "cand";
-    b.innerHTML = `<span class="tag"></span><span class="cmd"></span><div class="why"></div>`;
+    b.dataset.i = i;
+    b.innerHTML = `<span class="tag"></span><span class="cmd"></span>`;
     b.querySelector(".tag").textContent = c.tag;
     b.querySelector(".cmd").textContent = c.cmd;
-    b.querySelector(".why").textContent = c.why;
-    const preview = () => { render(c.act(clone(baseState)), baseState); };
-    b.addEventListener("mouseenter", preview);
-    b.addEventListener("focus", preview);
-    b.addEventListener("mouseleave", () => render(baseState));
-    b.addEventListener("click", () => { closePop(true); commit(c.act(clone(baseState)), c.cmd); });
+    b.addEventListener("mouseenter", () => show(i));
+    b.addEventListener("focus", () => show(i));
+    b.addEventListener("click", () => { closePop(true); commit(c.act(clone(base)), c.cmd); });
     popList.appendChild(b);
-  }
+  });
+
   pop.classList.add("open");
   placePop();
-  popList.querySelector(".cand").focus({ preventScroll: true });
+  popList.firstChild.focus({ preventScroll: true });
 }
+
+/* ↑↓ 로 후보 사이 이동 — 포커스가 곧 미리보기라 키보드만으로도 다 보인다 */
+popList.addEventListener("keydown", e => {
+  if(e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  const items = [...popList.children];
+  const i = items.indexOf(document.activeElement);
+  items[(Math.max(0, i) + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+});
 
 /* 팝오버는 커서가 아니라 캔버스 '바깥'에 붙는다 — 호버 미리보기를 가리면 안 되니까.
    옆에 자리가 없으면 캔버스 아래로 내리고, 그만큼 목록 높이를 줄여 겹침을 없앤다 */
@@ -180,6 +258,7 @@ function closePop(skipRestore){
   if(!skipRestore) render(state);
 }
 
+window.addEventListener("resize", () => { if(pop.classList.contains("open")) placePop(); });
 document.addEventListener("keydown", e => { if(e.key === "Escape") closePop(); });
 document.addEventListener("pointerdown", e => { if(pop.classList.contains("open") && !pop.contains(e.target)) closePop(); });
 
@@ -190,12 +269,17 @@ document.addEventListener("pointerdown", e => { if(pop.classList.contains("open"
 const BRANCH_POOL = ["hotfix","release","experiment","refactor","docs","spike"];
 const on = (id, fn) => document.getElementById(id).addEventListener("click", fn);
 
+on("btn-resolve", () => commit(OPS.resolveConflict(clone(state)), state.conflict.cont));
+on("btn-abort",   () => commit(OPS.abortConflict(clone(state)),   state.conflict.abort));
+
 on("btn-commit", () => {
+  if(state.conflict) return;
   const msg = nextMsg().trim();
   commit(OPS.commit(clone(state), msg), `git commit -m "${msg}"`);
 });
 
 on("btn-branch", () => {
+  if(state.conflict) return;
   const name = BRANCH_POOL.find(n => !(n in state.refs)) || "branch-" + Object.keys(state.refs).length;
   commit(OPS.createBranch(clone(state), name, headCommit(state), true), `git checkout -b ${name}`);
 });
@@ -214,6 +298,7 @@ on("btn-reflog", () => {
 });
 
 on("btn-mate", () => {
+  if(state.conflict) return;
   // cmdText 없음 = reflog 에 안 남는다. 내 ref 는 하나도 안 움직였으니 그게 맞다
   const b = Object.keys(state.remote)[0] || "main";
   commit(OPS.matePush(clone(state), b), null);
@@ -223,19 +308,19 @@ on("btn-undo", () => {
   if(!undoStack.length) return;
   state = undoStack.pop();
   state.log.push({ k:"out", t:"↶ 한 단계 되돌렸습니다." });
-  render(state); renderConsole();
+  render(state); checkQuest(); renderConsole();
   document.getElementById("btn-undo").disabled = !undoStack.length;
 });
 
-on("btn-reset", () => {
-  undoStack.length = 0; msgIdx = 0; mateIdx = 0;
-  state = initialState();
-  render(state); renderConsole();
-  document.getElementById("btn-undo").disabled = true;
-});
+on("btn-reset", () => loadMode(questId));   // 과제 중이면 그 과제를 처음부터
 
 on("btn-clear", () => { state.log = []; renderConsole(); });
 
+const modeSel = document.getElementById("mode");
+for(const sc of SCENARIOS) modeSel.add(new Option(sc.title, sc.id));
+modeSel.addEventListener("change", () => loadMode(modeSel.value));
+
 document.getElementById("btn-undo").disabled = true;
 render(state);
+renderQuest();
 renderConsole();

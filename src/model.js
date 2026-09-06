@@ -23,23 +23,30 @@ const newId = () => Math.random().toString(16).slice(2,9);
 // 진짜 git 도 gc 하면 그렇다. 부족하면 숫자만 키우면 되고, 제대로 하려면 만료 시각을 달아야 한다.
 const REFLOG_MAX = 40;
 
+/* 충돌 판정용 — 커밋마다 건드린 파일을 하나씩 달아둔다.
+   진짜 3-way merge 는 필요 없다. "양쪽이 같은 파일을 건드렸나"만 보면 된다 */
+const FILES = ["auth.js", "api.js", "styles.css"];
+const MATE_FILE = "docs/CHANGELOG.md";     // 동료는 늘 다른 파일 — 원격 과제가 충돌로 새지 않게
+let fileIdx = 0;
+const nextFile = () => FILES[fileIdx++ % FILES.length];
+
 function initialState(){
   const s = {
     commits:{}, order:[],
     refs:{}, tags:{}, tracking:{}, remote:{},
-    head:{type:"branch",ref:"main"}, reflog:[], log:[]
+    head:{type:"branch",ref:"main"}, reflog:[], log:[], conflict:null
   };
-  const mk = (msg, parents) => {
+  const mk = (msg, parents, files) => {
     const id = newId();
-    s.commits[id] = { id, parents, msg };
+    s.commits[id] = { id, parents, msg, files, patch: newId() };
     s.order.push(id);
     return id;
   };
-  const c1 = mk("프로젝트 초기 설정", []);
-  const c2 = mk("README 작성", [c1]);
-  const c3 = mk("빌드 스크립트 정리", [c2]);
-  const f1 = mk("로그인 폼 추가", [c2]);
-  const f2 = mk("비밀번호 검증", [f1]);
+  const c1 = mk("프로젝트 초기 설정", [], ["build.sh"]);
+  const c2 = mk("README 작성", [c1], ["README.md"]);
+  const c3 = mk("빌드 스크립트 정리", [c2], ["build.sh"]);
+  const f1 = mk("로그인 폼 추가", [c2], ["auth.js"]);
+  const f2 = mk("비밀번호 검증", [f1], ["auth.js"]);
   s.refs     = { main:c3, feature:f2 };
   s.tags     = { "v0.1": c2 };
   s.tracking = { main:c3 };
@@ -110,13 +117,46 @@ const orphanSet = s => {
 
 function out(s, t, k){ s.log.push({k: k || "out", t}); }
 
+/* 두 갈래의 공통 조상 — 커밋은 항상 부모보다 늦게 만들어지므로 order 뒤에서부터 찾으면 된다 */
+function mergeBase(s, a, b){
+  const A = ancestors(s, a), B = ancestors(s, b);
+  for(let i = s.order.length - 1; i >= 0; i--){
+    const id = s.order[i];
+    if(A.has(id) && B.has(id)) return id;
+  }
+  return null;
+}
+/** 공통 조상 이후 양쪽이 같은 파일을 건드렸으면 충돌.
+    단 상대가 이미 갖고 있는 변경(같은 patch)은 뺀다 — rebase 한 커밋과 그 원본은 같은 변경이다 */
+function conflictFiles(s, a, b){
+  const base = ancestors(s, mergeBase(s, a, b));
+  const only = tip => [...ancestors(s, tip)].filter(id => !base.has(id)).map(id => s.commits[id]);
+  const A = only(a), B = only(b);
+  const pa = new Set(A.map(c => c.patch)), pb = new Set(B.map(c => c.patch));
+  const fa = new Set(A.filter(c => !pb.has(c.patch)).flatMap(c => c.files || []));
+  const fb = new Set(B.filter(c => !pa.has(c.patch)).flatMap(c => c.files || []));
+  return [...fa].filter(f => fb.has(f));
+}
+/** 충돌을 걸어두고 그래프는 손대지 않는다 — abort 가 공짜가 된다 */
+function raiseConflict(s, files, label, cont, abort, then){
+  s.conflict = { files, label, cont, abort, then };
+  out(s, `Auto-merging ${files[0]}`);
+  out(s, `CONFLICT (content): Merge conflict in ${files.join(", ")}`);
+  out(s, `${label} 을(를) 멈췄습니다. 충돌을 해결하고 이어가거나, 통째로 취소하세요.`);
+  out(s, `양쪽이 ${files.join(", ")} 를 같이 건드렸습니다. 어느 쪽이 맞는지는 git 이 모릅니다 — 사람이 골라야 하는 지점.`, "note");
+  return s;
+}
+
 /* ============================================================
    ops — 전부 (state) => state 인 순수 함수. 미리보기·실행·undo가 여기서 나옴
    ============================================================ */
 
-function addCommit(s, msg, parents){
+/* patch — "같은 변경"의 정체. 해시는 부모까지 포함해 계산되니 rebase/amend 로 새로 쓰면
+   해시는 바뀌어도 변경 자체는 그대로다. 진짜 git 의 patch-id 와 같은 역할이고,
+   이게 있어야 "이미 반영된 변경"을 충돌로 오인하지 않는다 */
+function addCommit(s, msg, parents, files, patch){
   const id = newId();
-  s.commits[id] = { id, parents, msg };
+  s.commits[id] = { id, parents, msg, files: files || [], patch: patch || newId() };
   s.order.push(id);
   return id;
 }
@@ -128,12 +168,13 @@ function moveHere(s, id){
 }
 
 const OPS = {
-  commit(s, msg){
+  commit(s, msg, files){
     const parent = headCommit(s);
-    const id = addCommit(s, msg, parent ? [parent] : []);
+    const f = files || [nextFile()];
+    const id = addCommit(s, msg, parent ? [parent] : [], f);
     const b = moveHere(s, id);
     out(s, `[${b || "detached HEAD"} ${shortOf(id)}] ${msg}`);
-    out(s, ` 1 file changed, 4 insertions(+)`);
+    out(s, ` ${f.join(", ")} | 4 +++-`);
     return s;
   },
 
@@ -183,14 +224,19 @@ const OPS = {
       out(s, `Fast-forward — 새 커밋 없이 포인터만 앞으로 갔습니다.`, "note");
       return s;
     }
+    if(!opt.resolved){
+      const cf = conflictFiles(s, a, b);
+      if(cf.length) return raiseConflict(s, cf, `${from} 병합`,
+        "git add . && git commit", "git merge --abort", {op:"merge", from, opt});
+    }
     if(opt.squash){
-      const id = addCommit(s, `Squashed '${from}'`, [a]);
+      const id = addCommit(s, `Squashed '${from}'`, [a], conflictFiles(s, a, b));
       s.refs[into] = id;
       out(s, `Squash commit -- not updating HEAD`);
       out(s, `${from} 의 변경 내용만 커밋 하나로 얹었습니다. 부모가 하나뿐이라 ${from} 과 이어지지 않습니다 — 나중에 진짜 머지하면 중복됩니다.`, "note");
       return s;
     }
-    const id = addCommit(s, `Merge branch '${from}' into ${into}`, [a, b]);
+    const id = addCommit(s, `Merge branch '${from}' into ${into}`, [a, b], []);
     s.refs[into] = id;
     out(s, `Merge made by the 'ort' strategy.`);
     out(s, opt.noff
@@ -202,10 +248,16 @@ const OPS = {
   /* ---------- 재작성 ---------- */
 
   /** branch 의 커밋 중 upstream 히스토리에 없는 것들을 newbase 위로 복제 */
-  replay(s, branch, newbase, upstream){
+  replay(s, branch, newbase, upstream, resolved){
     const skip = ancestors(s, upstream);
     const moving = s.order.filter(id => ancestors(s, s.refs[branch]).has(id) && !skip.has(id));
     if(!moving.length){ out(s, "Current branch is up to date."); return s; }
+    if(!resolved){
+      const cf = conflictFiles(s, s.refs[branch], newbase);
+      if(cf.length) return raiseConflict(s, cf, `${branch} 리베이스`,
+        "git add . && git rebase --continue", "git rebase --abort",
+        {op:"replay", branch, newbase, upstream});
+    }
     const map = {};
     let base = newbase;
     for(const id of moving){
@@ -213,7 +265,7 @@ const OPS = {
       const parents = old.parents.length > 1
         ? [base]                                        // 병합 커밋은 평탄화
         : [ old.parents[0] && map[old.parents[0]] ? map[old.parents[0]] : base ];
-      base = addCommit(s, old.msg, parents);
+      base = addCommit(s, old.msg, parents, old.files, old.patch);
       map[id] = base;
     }
     s.refs[branch] = base;
@@ -222,8 +274,14 @@ const OPS = {
     return s;
   },
 
-  cherryPick(s, id){
-    const nid = addCommit(s, s.commits[id].msg, [headCommit(s)]);
+  cherryPick(s, id, resolved){
+    if(!resolved){
+      const cf = conflictFiles(s, id, headCommit(s));
+      if(cf.length) return raiseConflict(s, cf, `${shortOf(id)} 체리픽`,
+        "git add . && git cherry-pick --continue", "git cherry-pick --abort",
+        {op:"cherryPick", id});
+    }
+    const nid = addCommit(s, s.commits[id].msg, [headCommit(s)], s.commits[id].files, s.commits[id].patch);
     const b = moveHere(s, nid);
     out(s, `[${b || "detached"} ${shortOf(nid)}] ${s.commits[id].msg}`);
     out(s, `원본 ${shortOf(id)} 은(는) 그대로 두고 복사본을 얹었습니다.`, "note");
@@ -231,7 +289,7 @@ const OPS = {
   },
 
   revert(s, id){
-    const nid = addCommit(s, `Revert "${s.commits[id].msg}"`, [headCommit(s)]);
+    const nid = addCommit(s, `Revert "${s.commits[id].msg}"`, [headCommit(s)], s.commits[id].files);
     const b = moveHere(s, nid);
     out(s, `[${b || "detached"} ${shortOf(nid)}] Revert "${s.commits[id].msg}"`);
     out(s, `히스토리를 지우지 않고, 되돌리는 커밋을 새로 쌓았습니다.`, "note");
@@ -241,7 +299,7 @@ const OPS = {
   /** 마지막 커밋을 새 해시로 다시 쓴다 */
   amend(s, msg){
     const old = s.commits[headCommit(s)];
-    const nid = addCommit(s, msg || old.msg, old.parents);
+    const nid = addCommit(s, msg || old.msg, old.parents, old.files, old.patch);
     const b = moveHere(s, nid);
     out(s, `[${b || "detached"} ${shortOf(nid)}] ${s.commits[nid].msg}`);
     out(s, `고친 게 아니라 ${shortOf(old.id)} 를 버리고 ${shortOf(nid)} 를 새로 썼습니다. 이미 push 했다면 강제 push 가 필요해집니다.`, "note");
@@ -256,7 +314,7 @@ const OPS = {
     const map = {};
     let base = s.commits[id].parents[0];
     for(const x of chain){
-      base = addCommit(s, x === id ? msg : s.commits[x].msg, [ map[s.commits[x].parents[0]] || base ]);
+      base = addCommit(s, x === id ? msg : s.commits[x].msg, [ map[s.commits[x].parents[0]] || base ], s.commits[x].files, s.commits[x].patch);
       map[x] = base;
     }
     s.refs[B] = base;
@@ -271,13 +329,14 @@ const OPS = {
     const parent = s.commits[id].parents[0];
     const merged = addCommit(s,
       fixup ? s.commits[parent].msg : `${s.commits[parent].msg} + ${s.commits[id].msg}`,
-      s.commits[parent].parents);
+      s.commits[parent].parents,
+      [...new Set([...(s.commits[parent].files||[]), ...(s.commits[id].files||[])])]);
     const skip = ancestors(s, id);
     const after = s.order.filter(x => ancestors(s, s.refs[B]).has(x) && !skip.has(x));
     const map = {};
     let base = merged;
     for(const x of after){
-      base = addCommit(s, s.commits[x].msg, [ map[s.commits[x].parents[0]] || base ]);
+      base = addCommit(s, s.commits[x].msg, [ map[s.commits[x].parents[0]] || base ], s.commits[x].files, s.commits[x].patch);
       map[x] = base;
     }
     s.refs[B] = base;
@@ -359,11 +418,15 @@ const OPS = {
     }
     if(rebase){
       OPS.replay(s, b, up, up);
+      if(s.conflict) return s;
       out(s, `내 커밋들을 origin/${b} 위로 다시 썼습니다. 병합 커밋 없이 일직선.`, "note");
       return s;
     }
     const a = s.refs[b];
-    const id = addCommit(s, `Merge branch '${b}' of origin into ${b}`, [a, up]);
+    const cf = conflictFiles(s, a, up);
+    if(cf.length) return raiseConflict(s, cf, `origin/${b} 병합`,
+      "git add . && git commit", "git merge --abort", {op:"merge", from:`origin/${b}`, opt:{at:up}});
+    const id = addCommit(s, `Merge branch '${b}' of origin into ${b}`, [a, up], []);
     s.refs[b] = id;
     out(s, `Merge made by the 'ort' strategy.`);
     out(s, `병합 커밋이 생겼습니다. 이게 쌓여서 지저분해지는 걸 피하려고 --rebase 를 쓰기도 합니다.`, "note");
@@ -372,10 +435,29 @@ const OPS = {
 
   /** 동료가 origin 에 커밋 하나를 올린 상황. 내 tracking 은 아직 모른다 */
   matePush(s, b){
-    const id = addCommit(s, nextMateMsg(), [s.remote[b]]);
+    const id = addCommit(s, nextMateMsg(), [s.remote[b]], [MATE_FILE]);
     s.remote[b] = id;
     out(s, `(시뮬레이션) 동료가 origin/${b} 에 커밋을 하나 올렸습니다.`);
     out(s, `아직 그래프에 안 보입니다 — fetch 하기 전엔 origin 에 뭐가 있는지 알 수 없으니까.`, "note");
+    return s;
+  },
+
+  /* 충돌 해결 후 이어가기 — 멈췄던 그 명령을 resolved 로 다시 돌린다 */
+  resolveConflict(s){
+    const t = s.conflict.then;
+    s.conflict = null;
+    out(s, "충돌을 해결하고 이어갑니다.");
+    if(t.op === "merge")  return OPS.merge(s, t.from, Object.assign({}, t.opt, {resolved:true}));
+    if(t.op === "replay") return OPS.replay(s, t.branch, t.newbase, t.upstream, true);
+    return OPS.cherryPick(s, t.id, true);
+  },
+
+  /* 취소 — 충돌 났을 때 그래프를 아예 안 건드렸으므로 표시만 지우면 된다 */
+  abortConflict(s){
+    const label = s.conflict.label;
+    s.conflict = null;
+    out(s, `${label} 을(를) 취소했습니다.`);
+    out(s, `그래프가 시작 전 그대로인 것에 주목하세요. 충돌 중에는 아직 아무것도 바뀌지 않은 상태입니다.`, "note");
     return s;
   },
 

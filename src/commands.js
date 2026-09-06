@@ -7,6 +7,12 @@
 
 const mk = list => (cmd, why, tag, act) => list.push({ cmd, why, tag, act });
 
+/* 고르기 전에 알려준다 — 충돌은 놀라는 것보다 예고되는 편이 배우기 쉽다 */
+const warnConflict = (s, a, b) => {
+  const cf = conflictFiles(s, a, b);
+  return cf.length ? ` ⚠ 양쪽이 ${cf.join(", ")} 를 건드려서 충돌이 납니다.` : "";
+};
+
 function nextTagName(s){
   let n = 2;
   while(s.tags["v0." + n] !== undefined) n++;
@@ -64,6 +70,7 @@ function candidates(s, g){
   }
 
   if(g.kind === "head"){
+    if(headCommit(s) === T) return [];
     const names = refsAt(s, T);
     if(names.length) add(`git checkout ${names[0]}`,
         `'${names[0]}' 브랜치에 올라탑니다. 여기서 커밋하면 브랜치가 같이 따라옵니다.`,
@@ -98,10 +105,11 @@ function candidates(s, g){
 
   if(isTip && D && D !== B){
     const wouldFF = isAncestor(s, s.refs[D], C);
+    const cw = warnConflict(s, s.refs[D], C);
     add(`git checkout ${D} && git merge ${B}`,
-        wouldFF
+        (wouldFF ? "" : cw) + (wouldFF
           ? `${D} 가 ${B} 의 조상이라 새 커밋 없이 포인터만 따라갑니다 — fast-forward.`
-          : `${B}의 작업을 ${D}에 합칩니다. 부모가 둘인 병합 커밋이 생기고, 양쪽 히스토리는 원래 모양 그대로 남습니다.`,
+          : `${B}의 작업을 ${D}에 합칩니다. 부모가 둘인 병합 커밋이 생기고, 양쪽 히스토리는 원래 모양 그대로 남습니다.`),
         "병합", x => { OPS.checkout(x, D); return OPS.merge(x, B); });
     if(wouldFF){
       add(`git checkout ${D} && git merge --no-ff ${B}`,
@@ -109,7 +117,7 @@ function candidates(s, g){
           "병합", x => { OPS.checkout(x, D); return OPS.merge(x, B, {noff:true}); });
     }
     add(`git checkout ${B} && git rebase ${D}`,
-        `${B}의 커밋들을 ${D} 끝으로 옮겨 다시 씁니다. 히스토리는 일직선이 되지만 커밋 해시가 전부 바뀝니다.`,
+        cw + `${B}의 커밋들을 ${D} 끝으로 옮겨 다시 씁니다. 히스토리는 일직선이 되지만 커밋 해시가 전부 바뀝니다.`,
         "재작성", x => { OPS.checkout(x, B); return OPS.replay(x, B, s.refs[D], s.refs[D]); });
     add(`git checkout ${D} && git merge --squash ${B}`,
         `${B} 의 변경을 커밋 하나로 눌러 담습니다. ${D} 는 ${B} 과 이어지지 않아서, 나중에 또 머지하면 같은 변경이 두 번 들어옵니다.`,
@@ -123,7 +131,7 @@ function candidates(s, g){
   }
 
   add(`${pre}git cherry-pick ${shortOf(C)}`,
-      "그 커밋 하나만 복사해서 여기 위에 올립니다. 원본은 제자리에 그대로.",
+      warnConflict(s, C, T) + "그 커밋 하나만 복사해서 여기 위에 올립니다. 원본은 제자리에 그대로.",
       "복사", x => { if(D && D !== curBranch(x)) OPS.checkout(x, D); else if(!D) OPS.checkout(x, T); return OPS.cherryPick(x, C); });
 
   return list;
