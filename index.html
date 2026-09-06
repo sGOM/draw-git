@@ -1,0 +1,90 @@
+<meta charset="utf-8">
+<title>손으로 그리는 Git</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+
+
+<div class="shell">
+  <header class="top">
+    <div class="brand">
+      <h1>손으로 그리는 <em>Git</em></h1>
+      <p>그래프를 마우스로 끌어보세요. 무슨 명령어가 그 일을 하는지 되물어보고, 고른 명령을 콘솔에 찍어줍니다.</p>
+    </div>
+    <div class="toolbar">
+      <button class="btn primary" id="btn-commit">+ 커밋</button>
+      <button class="btn" id="btn-branch">+ 브랜치</button>
+      <button class="btn" id="btn-reflog">git reflog</button>
+      <button class="btn" id="btn-mate">동료가 push</button>
+      <button class="btn" id="btn-undo">↶ 되돌리기</button>
+      <button class="btn" id="btn-reset">처음부터</button>
+    </div>
+  </header>
+
+  <div class="work">
+    <section class="panel stage-wrap" id="stage-wrap">
+      <div class="panel-head">
+        <div class="headline-state">
+          HEAD → <code id="head-label">main</code>
+          <span id="head-note"></span>
+        </div>
+        <span class="sync" id="sync"></span>
+        <span class="preview-pill">● 미리보기 — 이 명령을 고르면 이렇게 됩니다</span>
+      </div>
+      <div class="stage" id="stage">
+        <svg id="graph" width="880" height="440" role="img" aria-label="git 커밋 그래프"></svg>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel term">
+        <div class="panel-head">
+          <span class="panel-title">console</span>
+          <button class="linkish" id="btn-clear">지우기</button>
+        </div>
+        <div class="console" id="console"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><span class="panel-title">이렇게 해보세요</span></div>
+        <div class="guide">
+          <p class="grp">끌어다 놓기</p>
+          <dl>
+            <dt>브랜치 이름표</dt><dd>포인터만 옮기기 — <b>reset</b> / <b>branch -f</b> / <b>checkout</b></dd>
+            <dt>커밋 → 다른 브랜치 끝</dt><dd>합치기 — <b>merge</b> / <b>--no-ff</b> / <b>--squash</b> / <b>rebase</b></dd>
+            <dt>커밋 → 자기 부모</dt><dd>둘을 하나로 — <b>rebase -i</b> squash / fixup</dd>
+            <dt>중간 커밋</dt><dd>베이스 갈아끼우기 — <b>rebase --onto</b> / <b>cherry-pick</b></dd>
+            <dt>HEAD, 태그</dt><dd>보는 위치 옮기기 / <b>tag -f</b> vs 새 태그</dd>
+          </dl>
+          <dl>
+            <dt>브랜치 칩 클릭</dt><dd>갈아타기 — <b>switch</b> vs <b>checkout</b></dd>
+          </dl>
+          <p class="grp">우클릭 (클릭과 같은 메뉴)</p>
+          <dl>
+            <dt>커밋</dt><dd><b>amend</b> / <b>revert</b> / <b>reset</b> / <b>reword</b> / <b>drop</b> / <b>tag</b></dd>
+            <dt>브랜치 칩</dt><dd>원격 — <b>push</b> / <b>--force-with-lease</b> / <b>pull</b> / <b>--rebase</b></dd>
+            <dt>origin/… 칩</dt><dd><b>fetch</b> 로 받아온 것 합치기 / 맞추기</dd>
+            <dt>흐린 커밋</dt><dd>버려진 커밋 되살리기 — <b>reflog</b> / <b>branch</b></dd>
+          </dl>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<div id="pop" role="dialog" aria-label="명령어 선택">
+  <div class="pop-head">
+    <div class="pop-q" id="pop-q"></div>
+    <div class="pop-sub" id="pop-sub"></div>
+  </div>
+  <div class="pop-list" id="pop-list"></div>
+  <div class="pop-foot"><span>항목에 마우스를 올리면 결과를 미리 봅니다</span><span>Esc 취소</span></div>
+</div>
+
+
+<script src="src/model.js"></script>
+<script src="src/layout.js"></script>
+<script src="src/render.js"></script>
+<script src="src/commands.js"></script>
+<script src="src/main.js"></script>
+<script src="src/selfcheck.js"></script>
